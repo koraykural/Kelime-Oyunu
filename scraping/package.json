@@ -1,0 +1,18 @@
+{
+  "name": "kelime-oyunu",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "csv-parser": "^2.3.2",
+    "csv-writer": "^1.6.0",
+    "fast-csv": "^4.1.3",
+    "pg": "^8.0.3",
+    "selenium-webdriver": "^4.0.0-alpha.7"
+  }
+}
