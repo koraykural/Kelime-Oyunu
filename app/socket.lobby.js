@@ -14,48 +14,69 @@ const createID = async () => {
       return '';
   }
 }
+const findMember = async (id, roomID) => {
+  const players = await client.SMEMBERS('room_' + roomID);
+  for (let i = 0; i < players.length; i++) {
+    const player = players[i];
+    const playerParsed = JSON.parse(player);
+    if(playerParsed.id === id)
+      return player;
+  }
+}
 
 const createRoom = async (id, username) => {
   // Create a unique 6 digit room id
   const roomID = await createID();
   // Update redis
-  const players = [{id, username, isHost: true, isReady: true}];
-  client.set('room_' + roomID, JSON.stringify(players));
+  const players = {id, username, isHost: true, isReady: true};
+  client.SADD('room_' + roomID, JSON.stringify(players));
   client.set('user_' + id, roomID);
   // Emit message
-  return { roomCreated: { roomID, players } };
+  return { roomCreated: { roomID, players: [players] } };
 }
 
 const joinRoom = async (id, msg) => {
   const { roomID, username } = msg;
 
   // Check if room exist, if not emit error message
-  let players = await client.get('room_' + roomID);
+  let players = await client.SMEMBERS('room_' + roomID);
   if(!players)
     return {personMsg: {roomNotFound: true}};
   
+  let parsedPlayers = [];
+  for (let i = 0; i < players.length; i++) {
+    parsedPlayers.push(JSON.parse(players[i]));
+  }
+  
   // Update room data in redis
-  players = JSON.parse(players);
-  players.push({id, username, isHost: false, isReady: false});
-  client.set('room_' + roomID, JSON.stringify(players));
+  const newUser = {id, username, isHost: false, isReady: false};
+  parsedPlayers.push({id, username, isHost: false, isReady: false});
+  client.SADD('room_' + roomID, JSON.stringify(newUser));
   client.set('user_' + id, roomID);
+
   // Emit messages
   return {
-    personMsg: {joined: {players}},
+    personMsg: {joined: {players: parsedPlayers}},
     roomMsg: {join: { id, username: msg.username, isReady: false, isHost: false }}
   };
 }
 
 const toggleReady = async (id, msg) => {
   const { roomID, isReady } = msg;
-  // Get room of the user and find his index 
-  let roomData = JSON.parse(await client.get('room_' + roomID));
-  const index = roomData.findIndex(x => x.id == id);
-  // Toggle ready property
-  roomData[index].isReady = isReady;
-  // Update redis
-  client.set('room_' + roomID, JSON.stringify(roomData));
-  // Emit message
+
+  // Get unparsed data of players
+  const player = await findMember(id, roomID);
+
+  // Change isReady property
+  const playerParsed = JSON.parse(player);
+  playerParsed.isReady = isReady;
+
+  // Remove from set
+  await client.SREM('room_' + roomID, player);
+
+  // Add to set again
+  client.SADD('room_' + roomID, JSON.stringify(playerParsed));
+
   return { ready: { id, isReady } };
 }
 
@@ -65,37 +86,38 @@ const leaveRoom = async (id) => {
   if(!roomID) 
     return { isHost: false, hasRoom: false };
 
-  // Get room of the user and find its index 
-  let roomData = JSON.parse(await client.get('room_' + roomID));
-  const index = roomData.findIndex(x => x.id == id);
-  // Get if he is host or not
-  const isHost = roomData[index].isHost;
-  // Remove him from roomData
-  if (index > -1)
-    roomData.splice(index, 1);
+  // Get unparsed player data from set
+  const player = await findMember(id, roomID);
+
+  if(!player)
+    return { isHost: false, hasRoom: false };
+
+  // Parse player data then remove it from set
+  const playerParsed = JSON.parse(player);
+  const isHost = playerParsed.isHost;
+  await client.SREM('room_' + roomID, player);
 
   // Clear redis user data
   client.DEL('user_' + id);
-  if(roomData.length == 0) {
-    client.DEL('room_' + roomID);
-    return { isHost: false, hasRoom: false };
-  }
 
-  // to return;
   let roomMsg = { disconnect: { id } };
   let newHost = '';
 
   // If host, set a new host
   if(isHost) {
-    roomData[0].isHost = true;
-    roomData[0].isReady = true; // Host is ready anytime
-    newHost = roomData[0].id;
-    roomMsg.newHost = { id: newHost };
+    // Get a random player
+    newHost = await client.SRANDMEMBER('room_'+ roomID);
+    // Remove him from set
+    await client.SREM('room_' + roomID, newHost);
+    // Change some properties
+    newHost = JSON.parse(newHost);
+    newHost.isHost = true;
+    newHost.isReady = true;
+    // Add to set again
+    client.SADD('room_' + roomID, JSON.stringify(newHost));
+    roomMsg.newHost = { id: newHost.id };
   }
-
-  // Update redis room data
-  client.set('room_' + roomID, JSON.stringify(roomData));
-  return { hasRoom: true, isHost, newHost, roomID, roomMsg };
+  return { hasRoom: true, isHost, newHost: newHost.id, roomID, roomMsg };
 }
 
 module.exports = { createRoom, joinRoom, toggleReady, leaveRoom };
